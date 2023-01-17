@@ -27,6 +27,7 @@ import math
 import numpy as np
 from io import open
 from tqdm import tqdm
+import wandb
 import torch
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler, TensorDataset
@@ -34,7 +35,17 @@ from torch.utils.data.distributed import DistributedSampler
 from transformers import (WEIGHTS_NAME, AdamW, get_linear_schedule_with_warmup,
                           RobertaConfig, RobertaModel, RobertaTokenizer,
                           BartConfig, BartForConditionalGeneration, BartTokenizer,
-                          T5Config, T5ForConditionalGeneration, T5Tokenizer)
+                          T5Tokenizer,
+                          HfArgumentParser)
+
+from ttadapters import (
+    T5Config, T5ForConditionalGeneration,
+    get_adapter_config, modify_model_after_init,
+    AdapterTrainingArguments, TrainingArguments, DataTrainingArguments, ModelArguments
+)
+from dataclasses import fields
+import sys
+
 import multiprocessing
 import time
 
@@ -129,9 +140,116 @@ def main():
 
     # Build model
     config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
-    config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path)
-    model = model_class.from_pretrained(args.model_name_or_path)
+    # config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path)
+    # model = model_class.from_pretrained(args.model_name_or_path)
     tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name)
+
+    ###############
+    ### START INJECTED PART
+    ###############
+
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments,
+                               AdapterTrainingArguments))
+    if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
+        # If we pass only one argument to the script and it's the path to a json file,
+        # let's parse it to get our arguments.
+        model_args, data_args, training_args, adapter_args = parser.parse_json_file(
+            json_file=os.path.abspath(sys.argv[1]))
+    else:
+        model_args, data_args, training_args, adapter_args = parser.parse_args_into_dataclasses()
+
+    training_args.output_dir = f"outputs/{data_args.task_name}/{training_args.experiment_name}"
+
+    # Setup logging
+    run = None
+    exp_name = data_args.task_name + "_" + training_args.experiment_name
+    run = wandb.init(project=training_args.project_name, name=exp_name, entity='i_pakhalko')
+
+    run.config.task_name = data_args.task_name
+    run.config.max_source_length = data_args.max_source_length
+    run.config.experiment_name = training_args.experiment_name
+    run.config.num_train_epochs = training_args.num_train_epochs
+    run.config.learning_rate = training_args.learning_rate
+    run.config.warmup_steps = training_args.warmup_steps
+    run.config.batch_size = training_args.per_device_train_batch_size
+    run.config.non_linearity = adapter_args.non_linearity
+
+    run.config.task_reduction_factor = adapter_args.task_reduction_factor
+    run.config.task_expansion_factor = adapter_args.task_expansion_factor
+    run.config.tensor_train_adapters = adapter_args.tensor_train_adapters
+    run.config.tt_rank = adapter_args.tt_rank
+    run.config.tt_d = adapter_args.tt_d
+    run.config.tt_shape = adapter_args.tt_shape
+    run.config.reverse_out_shape = adapter_args.reverse_out_shape
+    run.config.factorize_smaller_dim = adapter_args.factorize_smaller_dim
+    run.config.cores_nonlinearity = adapter_args.cores_nonlinearity
+    run.config.use_scripted_mul = adapter_args.use_scripted_mul
+    run.config.auto_shape_mode = adapter_args.auto_shape_mode
+    run.config.tensor_train_single = adapter_args.tensor_train_single
+    run.config.naive = adapter_args.naive
+    run.config.use_checkpointing = adapter_args.use_checkpointing
+    run.config.ttcore_checkpointing = adapter_args.ttcore_checkpointing
+
+    run.config.use_ScaleNorm = adapter_args.use_ScaleNorm
+    run.config.ScaleNorm_scale = adapter_args.ScaleNorm_scale
+    run.config.use_TTLayerNorm = adapter_args.use_TTLayerNorm
+    run.config.TTLayerNorm_rk = adapter_args.TTLayerNorm_rk
+    run.config.TTLayerNorm_preinit = adapter_args.TTLayerNorm_preinit
+    run.config.use_bias = adapter_args.use_bias
+    run.config.use_TTBias = adapter_args.use_TTBias
+    run.config.TTBias_rk = adapter_args.TTBias_rk
+    run.config.use_LayerNorm_mean = adapter_args.use_LayerNorm_mean
+
+    run.config.use_LoRA = adapter_args.use_LoRA
+    run.config.lora_dense = adapter_args.lora_dense
+    run.config.use_TTLoRA = adapter_args.use_TTLoRA
+    run.config.ttlora_separate = adapter_args.ttlora_separate
+    run.config.TTLoRA_init = adapter_args.TTLoRA_init
+
+
+    config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path)
+    config.gradient_checkpointing = adapter_args.use_checkpointing
+    config.train_task_adapters = adapter_args.train_task_adapters
+    config.prefix_tuning = adapter_args.prefix_tuning
+    adapter_config = get_adapter_config(adapter_args, data_args, training_args, config)
+
+    state_dict_path = None
+    # todo: TTLN
+    # if adapter_config is not None and adapter_config.use_TTLayerNorm and adapter_config.TTLayerNorm_preinit:
+    #     checkpoint_candidate = f'sd_TTLN_rk{adapter_config.TTLayerNorm_rk}.pt'
+    #     if os.path.exists(checkpoint_candidate):
+    #         state_dict_path = checkpoint_candidate
+
+    if model_class != T5ForConditionalGeneration:
+        model = model_class.from_pretrained(args.model_name_or_path)
+    else:
+        model = T5ForConditionalGeneration.from_pretrained(
+            args.model_name_or_path,
+            from_tf=bool(".ckpt" in args.model_name_or_path),
+            config=config,
+            # cache_dir=model_args.cache_dir,
+            # revision=model_args.model_revision,
+            # use_auth_token=True if model_args.use_auth_token else None,
+            adapter_config=adapter_config,
+            state_dict_path=state_dict_path,
+            save_state_dict=True
+        )
+        # model.resize_token_embeddings(len(tokenizer))  # todo ?
+        model, model_info = modify_model_after_init(model, training_args, adapter_args)
+
+        if model_info is not None:
+            attrs = [elem.name for elem in fields(model_info)]
+            for elem in attrs:
+                setattr(run.config, elem, getattr(model_info, elem))
+        run.config.input_dim = model.config.d_model
+
+
+    ###############
+    ### END INJECTED PART
+    ###############
+
+
+
 
     model = DefectModel(model, config, tokenizer, args)
     logger.info("Finish loading model [%s] from %s", get_model_size(model), args.model_name_or_path)

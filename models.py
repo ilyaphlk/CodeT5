@@ -3,7 +3,14 @@ import torch.nn as nn
 import numpy as np
 from transformers import (RobertaConfig, RobertaModel, RobertaTokenizer,
                           BartConfig, BartForConditionalGeneration, BartTokenizer,
-                          T5Config, T5ForConditionalGeneration, T5Tokenizer)
+                          T5Tokenizer)
+
+from ttadapters import (
+    T5Config, T5ForConditionalGeneration,
+    get_adapter_config, modify_model_after_init,
+    AdapterTrainingArguments, TrainingArguments, DataTrainingArguments, ModelArguments
+)
+
 import logging
 
 logger = logging.getLogger(__name__)
