@@ -148,12 +148,10 @@ def main():
     ### START INJECTED PART
     ###############
 
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments,
+    ttparser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments,
                                AdapterTrainingArguments))
-    for sys_arg in sys.argv:
-        if sys_arg.endswith(".json"):
-            model_args, data_args, training_args, adapter_args = parser.parse_json_file(
-                json_file=os.path.abspath(sys.argv[1]))
+    model_args, data_args, training_args, adapter_args = ttparser.parse_json_file(
+        json_file="debug_1.json")
 
     training_args.output_dir = f"outputs/{data_args.task_name}/{training_args.experiment_name}"
 
