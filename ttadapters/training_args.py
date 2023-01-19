@@ -1,4 +1,4 @@
-from adapters import ADAPTER_CONFIG_MAPPING
+from ttadapters.adapters import ADAPTER_CONFIG_MAPPING
 from dataclasses import dataclass, field
 from typing import Optional, List, Tuple
 from transformers import Seq2SeqTrainingArguments
