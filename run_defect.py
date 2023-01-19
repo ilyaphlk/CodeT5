@@ -123,6 +123,8 @@ def main():
     args = add_args(parser)
     logger.info(args)
 
+    logger.info("running defect script")
+
     # Setup CUDA, GPU & distributed training
     if args.local_rank == -1 or args.no_cuda:
         device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
@@ -148,6 +150,8 @@ def main():
     ### START INJECTED PART
     ###############
 
+    logger.info("start injected part")
+
     ttparser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments,
                                AdapterTrainingArguments))
     model_args, data_args, training_args, adapter_args = ttparser.parse_json_file(
@@ -155,10 +159,15 @@ def main():
 
     training_args.output_dir = f"outputs/{data_args.task_name}/{training_args.experiment_name}"
 
+    logger.info("training args: {}".format(training_args))
+    logger.info("adapter args: {}".format(adapter_args))
+
     # Setup logging
     run = None
     exp_name = data_args.task_name + "_" + training_args.experiment_name
     run = wandb.init(project=training_args.project_name, name=exp_name, entity='i_pakhalko')
+
+    logger.info("wandb run: {}".format(run))
 
     run.config.task_name = data_args.task_name
     run.config.max_source_length = data_args.max_source_length
@@ -238,13 +247,11 @@ def main():
                 setattr(run.config, elem, getattr(model_info, elem))
         run.config.input_dim = model.config.d_model
 
+    logger.info("end injected part")
 
     ###############
     ### END INJECTED PART
     ###############
-
-
-
 
     model = DefectModel(model, config, tokenizer, args)
     logger.info("Finish loading model [%s] from %s", get_model_size(model), args.model_name_or_path)
