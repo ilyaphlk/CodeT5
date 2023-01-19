@@ -28,17 +28,24 @@ from tqdm import tqdm
 import multiprocessing
 import time
 
+import wandb
 import torch
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader, SequentialSampler, RandomSampler
 from torch.utils.data.distributed import DistributedSampler
-from transformers import AdamW, get_linear_schedule_with_warmup
+from transformers import AdamW, get_linear_schedule_with_warmup, HfArgumentParser
 from models import build_or_load_gen_model
 from evaluator import smooth_bleu
 from evaluator.CodeBLEU import calc_code_bleu
 from evaluator.bleu import _bleu
 from utils import get_filenames, get_elapse_time, load_and_cache_gen_data
 from configs import add_args, set_seed, set_dist
+
+from ttadapters import (
+    get_adapter_config, modify_model_after_init,
+    AdapterTrainingArguments, TrainingArguments, DataTrainingArguments, ModelArguments
+)
+
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
@@ -168,11 +175,27 @@ def main():
     parser = argparse.ArgumentParser()
     args = add_args(parser)
     logger.info(args)
+
+    ttparser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments,
+                                 AdapterTrainingArguments))
+    model_args, data_args, training_args, adapter_args = ttparser.parse_json_file(
+        json_file="configs/defect/debug_1.json")
+
+    training_args.output_dir = f"outputs/{data_args.task_name}/{training_args.experiment_name}"
+    logger.info("adapter args: {}".format(adapter_args))
+
+
     t0 = time.time()
 
     set_dist(args)
     set_seed(args)
-    config, model, tokenizer = build_or_load_gen_model(args)
+    config, model, tokenizer = build_or_load_gen_model(
+        args,
+        model_args=model_args,
+        data_args=data_args,
+        training_args=training_args,
+        adapter_args=adapter_args
+    )
     model.to(args.device)
     if args.n_gpu > 1:
         # for DataParallel
@@ -180,6 +203,61 @@ def main():
     pool = multiprocessing.Pool(args.cpu_cont)
     args.train_filename, args.dev_filename, args.test_filename = get_filenames(args.data_dir, args.task, args.sub_task)
     fa = open(os.path.join(args.output_dir, 'summary.log'), 'a+')
+
+    # Setup logging
+    run = None
+    exp_name = data_args.task_name + "_" + training_args.experiment_name
+    run = wandb.init(project=training_args.project_name, name=exp_name, entity='i_pakhalko')
+
+    logger.info("wandb run: {}".format(run))
+
+    run.config.task_name = data_args.task_name
+    run.config.max_source_length = data_args.max_source_length
+    run.config.experiment_name = training_args.experiment_name
+    run.config.num_train_epochs = training_args.num_train_epochs
+    run.config.learning_rate = training_args.learning_rate
+    run.config.warmup_steps = training_args.warmup_steps
+    run.config.batch_size = training_args.per_device_train_batch_size
+    run.config.non_linearity = adapter_args.non_linearity
+
+    run.config.task_reduction_factor = adapter_args.task_reduction_factor
+    run.config.task_expansion_factor = adapter_args.task_expansion_factor
+    run.config.tensor_train_adapters = adapter_args.tensor_train_adapters
+    run.config.tt_rank = adapter_args.tt_rank
+    run.config.tt_d = adapter_args.tt_d
+    run.config.tt_shape = adapter_args.tt_shape
+    run.config.reverse_out_shape = adapter_args.reverse_out_shape
+    run.config.factorize_smaller_dim = adapter_args.factorize_smaller_dim
+    run.config.cores_nonlinearity = adapter_args.cores_nonlinearity
+    run.config.use_scripted_mul = adapter_args.use_scripted_mul
+    run.config.auto_shape_mode = adapter_args.auto_shape_mode
+    run.config.tensor_train_single = adapter_args.tensor_train_single
+    run.config.naive = adapter_args.naive
+    run.config.use_checkpointing = adapter_args.use_checkpointing
+    run.config.ttcore_checkpointing = adapter_args.ttcore_checkpointing
+
+    run.config.use_ScaleNorm = adapter_args.use_ScaleNorm
+    run.config.ScaleNorm_scale = adapter_args.ScaleNorm_scale
+    run.config.use_TTLayerNorm = adapter_args.use_TTLayerNorm
+    run.config.TTLayerNorm_rk = adapter_args.TTLayerNorm_rk
+    run.config.TTLayerNorm_preinit = adapter_args.TTLayerNorm_preinit
+    run.config.use_bias = adapter_args.use_bias
+    run.config.use_TTBias = adapter_args.use_TTBias
+    run.config.TTBias_rk = adapter_args.TTBias_rk
+    run.config.use_LayerNorm_mean = adapter_args.use_LayerNorm_mean
+
+    run.config.use_LoRA = adapter_args.use_LoRA
+    run.config.lora_dense = adapter_args.lora_dense
+    run.config.use_TTLoRA = adapter_args.use_TTLoRA
+    run.config.ttlora_separate = adapter_args.ttlora_separate
+    run.config.TTLoRA_init = adapter_args.TTLoRA_init
+
+    # if model_info is not None:
+    #     attrs = [elem.name for elem in fields(model_info)]
+    #     for elem in attrs:
+    #         setattr(run.config, elem, getattr(model_info, elem))
+    run.config.input_dim = model.config.d_model
+
 
     if args.do_train:
         if args.local_rank in [-1, 0] and args.data_num == -1:
@@ -253,6 +331,7 @@ def main():
                     global_step += 1
                     train_loss = round(tr_loss * args.gradient_accumulation_steps / (nb_tr_steps + 1), 4)
                     bar.set_description("[{}] Train loss {}".format(cur_epoch, round(train_loss, 3)))
+                    run.log({"train/loss": train_loss})
 
             if args.do_eval:
                 # Eval model with dev dataset
@@ -269,6 +348,7 @@ def main():
                 logger.info("  " + "*" * 20)
                 if args.data_num == -1:
                     tb_writer.add_scalar('dev_ppl', eval_ppl, cur_epoch)
+                run.log(result)
 
                 # save last checkpoint
                 if args.save_last_checkpoints:
@@ -312,6 +392,7 @@ def main():
                                                                        only_src=True, is_sample=True)
 
                     result = eval_bleu_epoch(args, eval_data, eval_examples, model, tokenizer, 'dev', 'e%d' % cur_epoch)
+                    run.log(result)
                     dev_bleu, dev_em = result['bleu'], result['em']
                     if args.task in ['summarize']:
                         dev_bleu_em = dev_bleu

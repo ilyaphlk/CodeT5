@@ -27,9 +27,20 @@ def get_model_size(model):
     return "{}M".format(round(model_size / 1e+6))
 
 
-def build_or_load_gen_model(args):
+def build_or_load_gen_model(args, **kwargs):
+    adapter_args = kwargs.get("adapter_args")
+    data_args = kwargs.get("data_args")
+    training_args = kwargs.get("training_args")
+
     config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
     config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path)
+    if config_class == T5Config:
+        config.gradient_checkpointing = adapter_args.use_checkpointing
+        config.train_task_adapters = adapter_args.train_task_adapters
+        config.prefix_tuning = adapter_args.prefix_tuning
+        adapter_config = get_adapter_config(adapter_args, data_args, training_args, config)
+
+
     tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name)
     if args.model_type == 'roberta':
         encoder = model_class.from_pretrained(args.model_name_or_path, config=config)
@@ -39,7 +50,23 @@ def build_or_load_gen_model(args):
                         beam_size=args.beam_size, max_length=args.max_target_length,
                         sos_id=tokenizer.cls_token_id, eos_id=tokenizer.sep_token_id)
     else:
-        model = model_class.from_pretrained(args.model_name_or_path)
+        state_dict_path = None
+        if model_class == T5ForConditionalGeneration:
+            model = T5ForConditionalGeneration.from_pretrained(
+                args.model_name_or_path,
+                from_tf=bool(".ckpt" in args.model_name_or_path),
+                config=config,
+                # cache_dir=model_args.cache_dir,
+                # revision=model_args.model_revision,
+                # use_auth_token=True if model_args.use_auth_token else None,
+                adapter_config=adapter_config,
+                state_dict_path=state_dict_path,
+                save_state_dict=True
+            )
+            # model.resize_token_embeddings(len(tokenizer))  # todo ?
+            model, model_info = modify_model_after_init(model, training_args, adapter_args)
+        else:
+            model = model_class.from_pretrained(args.model_name_or_path)
 
     logger.info("Finish loading model [%s] from %s", get_model_size(model), args.model_name_or_path)
 
