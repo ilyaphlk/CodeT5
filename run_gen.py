@@ -181,7 +181,7 @@ def main():
     ttparser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments,
                                  AdapterTrainingArguments))
     model_args, data_args, training_args, adapter_args = ttparser.parse_json_file(
-        json_file="content/CodeT5/configs/defect/debug_1.json")
+        json_file="/content/CodeT5/configs/defect/debug_1.json")
 
     training_args.output_dir = f"outputs/{data_args.task_name}/{training_args.experiment_name}"
     logger.info("adapter args: {}".format(adapter_args))
