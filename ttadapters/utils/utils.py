@@ -1,4 +1,4 @@
-import os 
+import os
 import regex as re
 import logging
 from dataclasses import dataclass, fields
@@ -38,7 +38,7 @@ def get_adapter_config(adapter_args, data_args, training_args, config):
         adapter_config.input_dim = config.d_model
 
         if adapter_args.train_task_adapters:
-            data_args.tasks = [data_args.task_name] 
+            data_args.tasks = [data_args.task_name]
             adapter_config.tasks = data_args.tasks
         adapter_params = [field.name for field in fields(adapter_args)]
         for p in adapter_params:
@@ -98,7 +98,7 @@ def freeze_model_params(model, adapter_args):
                model.phm_rule_right.requires_grad = True
             else:
                model.phm_rule.requires_grad = True
-                 
+
         if adapter_args.hypercomplex_adapters and adapter_args.shared_W_phm:
             if adapter_args.factorized_phm:
                model.W_down_left.requires_grad = True
@@ -118,20 +118,20 @@ def freeze_model_params(model, adapter_args):
     if adapter_args.unfreeze_layer_norms:
         for name, sub_module in model.named_modules():
             if isinstance(sub_module, (T5LayerNorm, nn.LayerNorm, TTLayerNorm)):
-                print("found layernorm", len(name.split(".")), name)
+                #print("found layernorm", len(name.split(".")), name)
                 if len(name.split(".")) < 7: # this will not consider layer norms inside adapters then.
                     for param_name, param in sub_module.named_parameters():
-                        print(f"set {param_name} grad = true")
+                        #print(f"set {param_name} grad = true")
                         param.requires_grad = True
 
-    if adapter_args.prefix_tuning:           
+    if adapter_args.prefix_tuning:
         freeze_params(model)
         for n, m in model.named_parameters():
             if "prefix_shared" == n:
-               m.requires_grad = True 
+               m.requires_grad = True
 
     # For bitfit we freeze the whole model except for the biases and the final classifier layer.
-    if adapter_args.bitfit: 
+    if adapter_args.bitfit:
         freeze_params(model)
         # unfreeze bias terms.
         for n,p in model.named_parameters():
@@ -162,7 +162,7 @@ def get_adapter_params_names(model):
         if isinstance(sub_module, (AdapterController, Adapter)):
            for param_name, param in sub_module.named_parameters():
                params_names.append(name+"."+param_name)
-    return params_names      
+    return params_names
 
 
 def get_layer_norm_params_names(model):
@@ -186,7 +186,7 @@ def get_last_checkpoint(output_dir):
 
 def pad_punctuation(text):
    """Re-implementation of _pad_punctuation in t5. This function adds spaces
-   around punctuation. While this pads punctuation as expected, it has the 
+   around punctuation. While this pads punctuation as expected, it has the
    unexpected effected of padding certain unicode characters with accents, with
    spaces as well. For instance: "François" becomes "Fran ç ois"""
    # Pad everything except for: underscores (_), whitespace (\s),
@@ -224,17 +224,17 @@ def modify_model_after_init(model, training_args, adapter_args, run=None):
 
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info("***** Model Trainable Parameters {} *****".format(trainable_params))
-    for n, p in model.named_parameters():
-        if p.requires_grad:
-            print("inside n ", n)
-        else:
-            print("leftover ", n)
+    # for n, p in model.named_parameters():
+    #     if p.requires_grad:
+    #         print("inside n ", n)
+    #     else:
+    #         print("leftover ", n)
 
     model_info = None
     if training_args.print_num_parameters:
-        for name, param in model.named_parameters():
-            if param.requires_grad:
-                logger.info("##### Parameter name %s", name)
+        # for name, param in model.named_parameters():
+        #     if param.requires_grad:
+        #         logger.info("##### Parameter name %s", name)
         total_lm_head_params = sum(p.numel() for p in model.lm_head.parameters())
         total_trainable_lm_head_params = sum(p.numel() for p in model.lm_head.parameters() if p.requires_grad)
         total_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)

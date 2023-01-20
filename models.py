@@ -31,6 +31,7 @@ def build_or_load_gen_model(args, **kwargs):
     adapter_args = kwargs.get("adapter_args")
     data_args = kwargs.get("data_args")
     training_args = kwargs.get("training_args")
+    model_args = kwargs.get("model_args")
 
     config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
     config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path)

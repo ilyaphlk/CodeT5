@@ -76,7 +76,8 @@ def eval_ppl_epoch(args, eval_data, eval_examples, model, tokenizer):
                                    target_ids=target_ids, target_mask=target_mask)
             else:
                 outputs = model(input_ids=source_ids, attention_mask=source_mask,
-                                labels=target_ids, decoder_attention_mask=target_mask)
+                                labels=target_ids, decoder_attention_mask=target_mask,
+                                task=args.task)  # todo only T5FCG
                 loss = outputs.loss
 
         eval_loss += loss.item()
@@ -114,7 +115,8 @@ def eval_bleu_epoch(args, eval_data, eval_examples, model, tokenizer, split_tag,
                                        use_cache=True,
                                        num_beams=args.beam_size,
                                        early_stopping=args.task == 'summarize',
-                                       max_length=args.max_target_length)
+                                       max_length=args.max_target_length,
+                                       task=args.task)  # todo only T5FCG
                 top_preds = list(preds.cpu().numpy())
             pred_ids.extend(top_preds)
 
@@ -179,7 +181,7 @@ def main():
     ttparser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments,
                                  AdapterTrainingArguments))
     model_args, data_args, training_args, adapter_args = ttparser.parse_json_file(
-        json_file="configs/defect/debug_1.json")
+        json_file="content/CodeT5/configs/defect/debug_1.json")
 
     training_args.output_dir = f"outputs/{data_args.task_name}/{training_args.experiment_name}"
     logger.info("adapter args: {}".format(adapter_args))
@@ -310,7 +312,7 @@ def main():
                                        target_ids=target_ids, target_mask=target_mask)
                 else:
                     outputs = model(input_ids=source_ids, attention_mask=source_mask,
-                                    labels=target_ids, decoder_attention_mask=target_mask)
+                                    labels=target_ids, decoder_attention_mask=target_mask, task=args.task)  # todo this is for this only
                     loss = outputs.loss
 
                 if args.n_gpu > 1:
